@@ -1,26 +1,304 @@
 // auth.js - Enterprise Logic
+// Sistema de Autenticação PCM System v2.0
 
+class AuthManager {
+    constructor() {
+        this.validateFirebaseLoad();
+        this.auth = firebase.auth();
+        this.googleProvider = new firebase.auth.GoogleAuthProvider();
+        this.initializeElements();
+        this.attachEventListeners();
+        console.log('✅ AuthManager inicializado com sucesso');
+    }
+
+    validateFirebaseLoad() {
+        if (typeof firebase === 'undefined') {
+            throw new Error('Firebase não foi carregado. Verifique se os scripts compat foram incluídos no HTML.');
+        }
+        if (!firebase.auth) {
+            throw new Error('firebase.auth não está disponível. Verifique se firebase-auth-compat.js foi carregado.');
+        }
+        console.log('✅ Firebase carregado com sucesso');
+    }
+
+    initializeElements() {
+        this.views = {
+            login: document.getElementById('login-view'),
+            register: document.getElementById('register-view')
+        };
+
+        this.forms = {
+            login: document.getElementById('login-form'),
+            register: document.getElementById('register-form')
+        };
+
+        this.inputs = {
+            loginEmail: document.getElementById('login-email'),
+            loginPass: document.getElementById('login-pass'),
+            regEmail: document.getElementById('reg-email'),
+            regPass: document.getElementById('reg-pass'),
+            regConfirm: document.getElementById('reg-confirm')
+        };
+
+        this.buttons = {
+            gotoRegister: document.getElementById('goto-register'),
+            gotoLogin: document.getElementById('goto-login'),
+            togglePass: document.querySelectorAll('.toggle-pass'),
+            btnGoogleLogin: document.getElementById('btn-google-login'),
+            btnLoginSubmit: document.getElementById('btn-login-submit'),
+            btnRegSubmit: document.getElementById('btn-reg-submit')
+        };
+
+        this.validateElements();
+    }
+
+    validateElements() {
+        const requiredElements = {
+            'login-view': this.views.login,
+            'register-view': this.views.register,
+            'login-form': this.forms.login,
+            'register-form': this.forms.register,
+            'gotoRegister': this.buttons.gotoRegister,
+            'gotoLogin': this.buttons.gotoLogin,
+            'btnGoogleLogin': this.buttons.btnGoogleLogin
+        };
+
+        const missing = Object.entries(requiredElements)
+            .filter(([_, el]) => !el)
+            .map(([name]) => name);
+
+        if (missing.length > 0) {
+            throw new Error(`Elementos não encontrados: ${missing.join(', ')}`);
+        }
+
+        console.log('✅ Todos os elementos encontrados');
+    }
+
+    attachEventListeners() {
+        this.attachNavigationListeners();
+        this.attachPasswordToggleListeners();
+        this.attachFormListeners();
+    }
+
+    attachNavigationListeners() {
+        this.buttons.gotoRegister.addEventListener('click', () => this.switchToRegister());
+        this.buttons.gotoLogin.addEventListener('click', () => this.switchToLogin());
+    }
+
+    attachPasswordToggleListeners() {
+        this.buttons.togglePass.forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                const targetId = btn.getAttribute('data-target');
+                const input = document.getElementById(targetId);
+                this.togglePasswordVisibility(input, btn);
+            });
+        });
+    }
+
+    attachFormListeners() {
+        this.forms.login.addEventListener('submit', (e) => this.handleLogin(e));
+        this.forms.register.addEventListener('submit', (e) => this.handleRegister(e));
+        this.buttons.btnGoogleLogin.addEventListener('click', () => this.handleGoogleLogin());
+    }
+
+    switchToRegister() {
+        console.log('➜ Alterando para tela de registro');
+        this.views.login.classList.add('hidden');
+        this.views.register.classList.remove('hidden');
+    }
+
+    switchToLogin() {
+        console.log('➜ Alterando para tela de login');
+        this.views.register.classList.add('hidden');
+        this.views.login.classList.remove('hidden');
+    }
+
+    togglePasswordVisibility(input, btn) {
+        if (input.type === 'password') {
+            input.type = 'text';
+            btn.classList.add('text-green-600');
+            btn.classList.remove('text-gray-400');
+        } else {
+            input.type = 'password';
+            btn.classList.remove('text-green-600');
+            btn.classList.add('text-gray-400');
+        }
+    }
+
+    async handleLogin(e) {
+        e.preventDefault();
+        console.log('➜ Tentando fazer login...');
+
+        const email = this.inputs.loginEmail.value.trim();
+        const password = this.inputs.loginPass.value;
+
+        // Validações
+        if (!email || !password) {
+            showToast('Por favor, preencha todos os campos', 'error');
+            return;
+        }
+
+        this.setLoading(this.buttons.btnLoginSubmit, true);
+
+        try {
+            console.log('Enviando credenciais para Firebase...');
+            await this.auth.signInWithEmailAndPassword(email, password);
+            console.log('✅ Login bem-sucedido!');
+            showToast('Login realizado com sucesso!', 'success');
+            setTimeout(() => window.location.href = 'index.html', 1000);
+        } catch (error) {
+            console.error('❌ Erro no login:', error);
+            this.handleAuthError(error);
+            this.setLoading(this.buttons.btnLoginSubmit, false);
+        }
+    }
+
+    async handleRegister(e) {
+        e.preventDefault();
+        console.log('➜ Iniciando registro de usuário...');
+
+        const email = this.inputs.regEmail.value.trim();
+        const password = this.inputs.regPass.value;
+        const confirmPassword = this.inputs.regConfirm.value;
+
+        // Validações
+        if (!email || !password || !confirmPassword) {
+            showToast('Por favor, preencha todos os campos', 'error');
+            return;
+        }
+
+        if (password !== confirmPassword) {
+            console.warn('⚠️ As senhas não conferem');
+            showToast('As senhas não conferem.', 'error');
+            this.inputs.regConfirm.focus();
+            return;
+        }
+
+        if (password.length < 6) {
+            console.warn('⚠️ Senha muito curta');
+            showToast('A senha deve ter no mínimo 6 caracteres.', 'error');
+            return;
+        }
+
+        // Validação de e-mail corporativo (opcional)
+        if (!this.isValidCorporateEmail(email)) {
+            showToast('Por favor, use um e-mail corporativo válido.', 'error');
+            return;
+        }
+
+        this.setLoading(this.buttons.btnRegSubmit, true);
+
+        try {
+            console.log('📧 E-mail:', email);
+            console.log('🔐 Criando usuário no Firebase...');
+            await this.auth.createUserWithEmailAndPassword(email, password);
+            console.log('✅ Conta criada com sucesso!');
+            showToast('Conta criada! Redirecionando...', 'success');
+            setTimeout(() => window.location.href = 'index.html', 1500);
+        } catch (error) {
+            console.error('❌ Erro ao criar conta:', error);
+            this.handleAuthError(error);
+            this.setLoading(this.buttons.btnRegSubmit, false);
+        }
+    }
+
+    async handleGoogleLogin() {
+        const btn = this.buttons.btnGoogleLogin;
+        const originalText = btn.innerHTML;
+
+        btn.disabled = true;
+        btn.innerHTML = `
+            <svg class="animate-spin h-5 w-5 text-blue-600" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
+            <span>Processando...</span>
+        `;
+
+        try {
+            console.log('➜ Iniciando Google Sign-In (popup)...');
+            await this.auth.signInWithPopup(this.googleProvider);
+            console.log('✅ Google Sign-In: sucesso');
+            showToast('Login com Google realizado!', 'success');
+            setTimeout(() => window.location.href = 'index.html', 1000);
+        } catch (error) {
+            console.error('❌ Google Sign-In falhou:', error);
+            this.handleAuthError(error);
+            btn.disabled = false;
+            btn.innerHTML = originalText;
+        }
+    }
+
+    setLoading(btn, isLoading) {
+        if (isLoading) {
+            btn.disabled = true;
+            btn.dataset.originalText = btn.innerHTML;
+            btn.innerHTML = `<svg class="animate-spin h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>`;
+            btn.classList.add('opacity-75', 'cursor-not-allowed');
+        } else {
+            btn.disabled = false;
+            btn.innerHTML = btn.dataset.originalText || btn.innerHTML;
+            btn.classList.remove('opacity-75', 'cursor-not-allowed');
+        }
+    }
+
+    isValidCorporateEmail(email) {
+        // Validação básica de e-mail
+        const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+        return emailRegex.test(email);
+    }
+
+    handleAuthError(error) {
+        console.error('🔴 Erro Firebase:', error.code, error.message);
+
+        const errorMessages = {
+            'auth/invalid-email': '❌ E-mail inválido. Digite um e-mail válido.',
+            'auth/user-not-found': '❌ Usuário não encontrado. Verifique o e-mail ou crie uma nova conta.',
+            'auth/wrong-password': '❌ Senha incorreta. Tente novamente.',
+            'auth/email-already-in-use': '❌ Este e-mail já está cadastrado. Tente fazer login ou use outro e-mail.',
+            'auth/weak-password': '❌ Senha muito fraca. Use pelo menos 6 caracteres.',
+            'auth/too-many-requests': '❌ Muitas tentativas de login. Tente novamente em alguns minutos.',
+            'auth/popup-closed-by-user': '❌ Login cancelado. O popup foi fechado.',
+            'auth/account-exists-with-different-credential': '❌ Este e-mail já está em uso com outro método de login.',
+            'auth/popup-blocked-by-browser': '❌ O popup foi bloqueado pelo navegador. Libere os popups para este site.',
+            'auth/network-request-failed': '❌ Erro de conexão. Verifique sua internet e tente novamente.',
+            'auth/operation-not-allowed': '❌ Este método de autenticação não está habilitado. Contate o administrador.'
+        };
+
+        const message = errorMessages[error.code] || `❌ Erro: ${error.message || 'desconhecido'}`;
+        console.error('📌 Mensagem final:', message);
+        showToast(message, 'error');
+    }
+}
+
+// Função Global para Notificações
+function showToast(message, type = 'success') {
+    const toast = document.createElement('div');
+    const colors = type === 'success' ? 'bg-green-600' : 'bg-red-600';
+    const icon = type === 'success' ? '✓' : '✕';
+
+    toast.className = `toast ${colors} text-white px-4 py-3 rounded shadow-lg flex items-center gap-3 min-w-[300px] mb-2 font-medium text-sm`;
+    toast.innerHTML = `
+        <span class="bg-white bg-opacity-20 rounded-full w-6 h-6 flex items-center justify-center font-bold text-xs">${icon}</span>
+        <span>${message}</span>
+    `;
+
+    document.getElementById('toast-container').appendChild(toast);
+
+    requestAnimationFrame(() => toast.classList.add('show'));
+
+    setTimeout(() => {
+        toast.classList.remove('show');
+        setTimeout(() => toast.remove(), 300);
+    }, 3000);
+}
+
+// Inicializar AuthManager quando o DOM estiver pronto
 document.addEventListener('DOMContentLoaded', () => {
-    
-    // Validação: Verificar se Firebase foi carregado
-    if (typeof firebase === 'undefined') {
-        console.error('❌ ERRO: Firebase não foi carregado. Verifique se os scripts compat foram incluídos no HTML.');
+    try {
+        new AuthManager();
+    } catch (error) {
+        console.error('❌ Erro ao inicializar:', error.message);
         alert('Erro ao inicializar o sistema. Verifique o console (F12) para detalhes.');
-        return;
     }
-    
-    if (!firebase.auth) {
-        console.error('❌ ERRO: firebase.auth não está disponível. Verifique se firebase-auth-compat.js foi carregado.');
-        return;
-    }
-    
-    console.log('✅ Firebase carregado com sucesso');
-    
-    const auth = firebase.auth();
-    // NOVO: Inicializa o provedor do Google
-    const googleProvider = new firebase.auth.GoogleAuthProvider();
-    
-    console.log('✅ Auth inicializado');
+});
 
     // --- ELEMENTOS ---
     const views = {
